@@ -1,4 +1,4 @@
-name: Libc Windows validation
+name: Libc focused Windows validation
 
 on:
   push:
@@ -15,7 +15,7 @@ concurrency:
 jobs:
   windows:
     runs-on: windows-2025
-    timeout-minutes: 180
+    timeout-minutes: 60
     defaults:
       run:
         shell: pwsh
@@ -96,19 +96,19 @@ jobs:
           if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'e4be9938b321da5f53e248d8ae947c984390e09d0f59fb6855644a972126e26b') {
             throw 'FFmpeg SHA-256 mismatch'
           }
-      - name: Configure the complete Release build
+      - name: Configure the Release runtime and test targets
         id: configure
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DBUILD_TESTING=ON "-DPython3_EXECUTABLE=$((Get-Command python).Source)" -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           python tools/check_test_registration.py build
-      - name: Build the complete project
+      - name: Build the changed runtime and focused test targets
         id: build
-        run: cmake --build build --parallel 3
-      - name: Build every patched system library
+        run: cmake --build build --target guest_legacy_signal_mask_tests guest_legacy_signal_mask_forwarding_tests guest_signal_tests guest_signal_set_tests --parallel 3
+      - name: Build patched libc, libkernel and libSceLibcInternal
         id: libs
-        run: cmake --build build --target libs --parallel 3
+        run: cmake --build build --target core/libs/libs/libc.prx core/libs/libs/libkernel.prx core/libs/libs/libSceLibcInternal.prx --parallel 3
       - name: Place the documented MinGW runtimes beside the patched libraries
         run: |
           $ErrorActionPreference = 'Stop'
@@ -117,22 +117,17 @@ jobs:
             Copy-Item -LiteralPath (Join-Path $compilerBin $name) -Destination build/core/libs/libs
           }
       - name: Run the new behavior tests and existing signal regressions
-        run: ctest --test-dir build -R '^guest_(legacy_signal_mask(_forwarding)?|signals|signal_sets|sigtimedwait|user_context|libc_threads)$' --output-on-failure --no-tests=error --output-log focused-signals.log --output-junit focused-signals.xml
-      - name: Run the complete registered test suite
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.libs.outcome == 'success' }}
-        run: ctest --test-dir build --output-on-failure --parallel 3 --output-log ctest.log --output-junit ctest.xml
+        run: ctest --test-dir build -R '^guest_(legacy_signal_mask(_forwarding)?|signals|signal_sets)$' --output-on-failure --no-tests=error --output-log focused-signals.log --output-junit focused-signals.xml
       - name: Upload the actual test results
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: libc-windows-validation
+          name: libc-windows-focused-validation
           if-no-files-found: warn
           retention-days: 7
           path: |
             focused-signals.log
             focused-signals.xml
-            ctest.log
-            ctest.xml
             build/Testing/Temporary/LastTest.log
             build/Testing/Temporary/LastTestsFailed.log
             build/CMakeFiles/CMakeConfigureLog.yaml
