@@ -22,7 +22,6 @@ jobs:
     env:
       CODE_SHA: 229741761951a528549824c17e0291c5f9b9b337
       BASE_SHA: d7948b09f95ea8e302590c09dbb3c0c0b714b84a
-      CCACHE_DIR: ${{ runner.temp }}/ccache
       CCACHE_MAXSIZE: 2G
     steps:
       - uses: actions/checkout@v7
@@ -58,6 +57,7 @@ jobs:
           $certificate = @('ucrt64', 'mingw64') | ForEach-Object { Join-Path $gitRoot "$_/etc/ssl/certs/ca-bundle.crt" } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
           if (-not $certificate) { throw 'Git for Windows CA bundle not found' }
           Add-Content -LiteralPath $env:GITHUB_ENV -Value "SSL_CERT_FILE=$certificate"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "CCACHE_DIR=$(Join-Path $env:RUNNER_TEMP 'ccache')"
       - uses: actions/cache@v6
         with:
           path: ${{ env.CCACHE_DIR }}
