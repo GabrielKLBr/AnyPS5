@@ -1,4 +1,4 @@
-name: Libc focused Windows validation
+name: Libc Windows PR validation
 
 on:
   push:
@@ -15,13 +15,13 @@ concurrency:
 jobs:
   windows:
     runs-on: windows-2025
-    timeout-minutes: 60
+    timeout-minutes: 90
     defaults:
       run:
         shell: pwsh
     env:
-      CODE_SHA: 3bab3a003a6b094aa68abbd57f440a90a3f79edb
-      BASE_SHA: 3c44638fc67f00471aded5f12311983fdb300d3a
+      CODE_SHA: 1cc37db1af3f671132ad6927cc629e7f6ffda01c
+      BASE_SHA: 1915df0dd430e678b4a2348e3454c0f306f5c7df
       CCACHE_MAXSIZE: 2G
     steps:
       - uses: actions/checkout@v7
@@ -108,16 +108,31 @@ jobs:
         run: cmake --build build --target guest_legacy_signal_mask_tests guest_legacy_signal_mask_forwarding_tests guest_signal_tests guest_signal_set_tests --parallel 3
       - name: Run the new behavior tests and existing signal regressions
         run: ctest --test-dir build -R '^guest_(legacy_signal_mask(_forwarding)?|signals|signal_sets)$' --output-on-failure --no-tests=error --output-log focused-signals.log --output-junit focused-signals.xml
+      - name: Build the complete project for PR validation
+        run: cmake --build build --parallel 3
+      - name: Verify the production libs target
+        run: cmake --build build --target libs --parallel 3
+      - name: Place the documented MinGW runtimes beside the patched libraries
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $compilerBin = Split-Path (Get-Command g++).Source
+          foreach ($name in @('libgcc_s_seh-1.dll', 'libstdc++-6.dll', 'libwinpthread-1.dll')) {
+            Copy-Item -LiteralPath (Join-Path $compilerBin $name) -Destination build/core/libs/libs
+          }
+      - name: Verify that all production libraries load
+        run: ctest --test-dir build -R '^patched_libraries$' --output-on-failure --no-tests=error --output-log patched-libraries.log --output-junit patched-libraries.xml
       - name: Upload the actual test results
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: libc-windows-focused-validation
+          name: libc-windows-pr-validation
           if-no-files-found: warn
           retention-days: 7
           path: |
             focused-signals.log
-            focused-signals.xml
+            build/focused-signals.xml
+            patched-libraries.log
+            build/patched-libraries.xml
             build/Testing/Temporary/LastTest.log
             build/Testing/Temporary/LastTestsFailed.log
             build/CMakeFiles/CMakeConfigureLog.yaml
