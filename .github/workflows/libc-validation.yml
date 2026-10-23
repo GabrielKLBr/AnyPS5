@@ -1,0 +1,138 @@
+name: Libc Windows validation
+
+on:
+  push:
+    branches: [validate/libc-legacy-signal-masks]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: libc-windows-validation
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CODE_SHA: 229741761951a528549824c17e0291c5f9b9b337
+      BASE_SHA: d7948b09f95ea8e302590c09dbb3c0c0b714b84a
+      CCACHE_DIR: ${{ runner.temp }}/ccache
+      CCACHE_MAXSIZE: 2G
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CODE_SHA }}
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - uses: actions/cache@v6
+        id: toolchain
+        with:
+          path: ${{ runner.temp }}/winlibs
+          key: winlibs-15.2.0-ucrt-r7-a914feafd7462126
+      - name: Prepare the documented Windows toolchain
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $toolchain = Join-Path $env:RUNNER_TEMP 'winlibs'
+          if ('${{ steps.toolchain.outputs.cache-hit }}' -ne 'true') {
+            $archive = Join-Path $env:RUNNER_TEMP 'winlibs.7z'
+            curl.exe --fail --location --retry 3 --retry-all-errors --output $archive 'https://github.com/brechtsanders/winlibs_mingw/releases/download/15.2.0posix-14.0.0-ucrt-r7/winlibs-x86_64-posix-seh-gcc-15.2.0-mingw-w64ucrt-14.0.0-r7.7z'
+            if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'a914feafd7462126637d4b8196a31f3fb856ad929768ceb092c99969b43675b3') {
+              throw 'WinLibs SHA-256 mismatch'
+            }
+            7z x -y "-o$toolchain" $archive
+          }
+          $gitRoot = Split-Path (Split-Path (Get-Command git).Source)
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value (Join-Path $toolchain 'mingw64/bin')
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value (Join-Path $gitRoot 'usr/bin')
+          $certificate = @('ucrt64', 'mingw64') | ForEach-Object { Join-Path $gitRoot "$_/etc/ssl/certs/ca-bundle.crt" } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $certificate) { throw 'Git for Windows CA bundle not found' }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "SSL_CERT_FILE=$certificate"
+      - uses: actions/cache@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: libc-windows-winlibs-15.2-r7-${{ github.sha }}
+          restore-keys: libc-windows-winlibs-15.2-r7-
+      - name: Record the actual revision and tools
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ((git rev-parse HEAD).Trim() -ne $env:CODE_SHA) { throw 'Unexpected source revision' }
+          [Environment]::OSVersion.VersionString
+          gcc --version
+          g++ --version
+          gcc -dumpmachine
+          cmake --version
+          ninja --version
+          git --version
+          python --version
+          ccache --version
+      - name: Verify conventions and script registration
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          git diff --check $env:BASE_SHA
+          python tools/check_conventions.py --base $env:BASE_SHA
+          python tools/check_test_registration.py --scripts
+      - name: Prepare the exact FFmpeg package required by the submodule
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $revision = (git -C 3rdparty/ffmpeg-core rev-parse --short=12 HEAD).Trim()
+          if ($revision -ne '9ac4cfd195f1') { throw 'Unexpected FFmpeg submodule revision' }
+          New-Item -ItemType Directory -Path build/externals -Force | Out-Null
+          $archive = "build/externals/$revision-ffmpeg-mingw-x64.zip"
+          curl.exe --fail --location --retry 3 --retry-all-errors --output $archive "https://github.com/KytyPS5/ext-ffmpeg-core/releases/download/$revision/ffmpeg-mingw-x64.zip"
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'e4be9938b321da5f53e248d8ae947c984390e09d0f59fb6855644a972126e26b') {
+            throw 'FFmpeg SHA-256 mismatch'
+          }
+      - name: Configure the complete Release build
+        id: configure
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DBUILD_TESTING=ON "-DPython3_EXECUTABLE=$((Get-Command python).Source)" -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          python tools/check_test_registration.py build
+      - name: Build the complete project
+        id: build
+        run: cmake --build build --parallel 3
+      - name: Build every patched system library
+        id: libs
+        run: cmake --build build --target libs --parallel 3
+      - name: Place the documented MinGW runtimes beside the patched libraries
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $compilerBin = Split-Path (Get-Command g++).Source
+          foreach ($name in @('libgcc_s_seh-1.dll', 'libstdc++-6.dll', 'libwinpthread-1.dll')) {
+            Copy-Item -LiteralPath (Join-Path $compilerBin $name) -Destination build/core/libs/libs
+          }
+      - name: Run the new behavior tests and existing signal regressions
+        run: ctest --test-dir build -R '^guest_(legacy_signal_mask(_forwarding)?|signals|signal_sets|sigtimedwait|user_context|libc_threads)$' --output-on-failure --no-tests=error --output-log focused-signals.log --output-junit focused-signals.xml
+      - name: Run the complete registered test suite
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.libs.outcome == 'success' }}
+        run: ctest --test-dir build --output-on-failure --parallel 3 --output-log ctest.log --output-junit ctest.xml
+      - name: Upload the actual test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: libc-windows-validation
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            focused-signals.log
+            focused-signals.xml
+            ctest.log
+            ctest.xml
+            build/Testing/Temporary/LastTest.log
+            build/Testing/Temporary/LastTestsFailed.log
+            build/CMakeFiles/CMakeConfigureLog.yaml
