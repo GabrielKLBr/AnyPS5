@@ -20,8 +20,8 @@ jobs:
       run:
         shell: pwsh
     env:
-      CODE_SHA: 229741761951a528549824c17e0291c5f9b9b337
-      BASE_SHA: d7948b09f95ea8e302590c09dbb3c0c0b714b84a
+      CODE_SHA: 3bab3a003a6b094aa68abbd57f440a90a3f79edb
+      BASE_SHA: 3c44638fc67f00471aded5f12311983fdb300d3a
       CCACHE_MAXSIZE: 2G
     steps:
       - uses: actions/checkout@v7
