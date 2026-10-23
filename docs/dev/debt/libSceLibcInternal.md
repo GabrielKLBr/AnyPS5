@@ -2,6 +2,8 @@
 
 ### Unknown function info
 
+- [sigblock and sigsetmask](../../../core/libs/prx/libSceLibcInternal/SignalMask.cpp) (libSceLibcInternal) are unverified on the console. Their signed 32-bit masks, previous-mask returns and zero-filled upper signal-set words follow FreeBSD 11.4 [sigcompat.c](https://github.com/freebsd/freebsd-src/blob/8c639945a44588f6cfdddfb057bb5aad88735da0/lib/libc/compat-43/sigcompat.c); mask storage and signal delivery use libkernel's `sigprocmask` and retain its limitations.
+
 - [_sceLibcInternalThreadAtexit, _sceLibcInternalThreadDtors](../../../core/libs/prx/libSceLibcInternal/Export.cpp) (libSceLibcInternal) - FreeBSD `__cxa_thread_atexit` semantics assumed; a null or non-image destructor and an allocation failure throw
 - [_sceLibcInternalForceTlsDestructor](../../../core/libs/prx/libSceLibcInternal/Export.cpp) (libSceLibcInternal) - behaviour follows `sceLibcForceTlsDestructor(int)` in a title's `libc.prx` (disassembly): the calling thread's destructors whose dso belongs to the module run newest first, only if the dso's module is loaded and the dso points to itself, in up to 4 passes. The return type is unknown (that function returns nothing), 0 is returned. The module of each dso is looked up when the destructors are forced, not when they are registered as `libc.prx` does
 
